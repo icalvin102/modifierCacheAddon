@@ -17,17 +17,26 @@ The addon adds `Mesh Source` and `Modifier Cache` to the `Modifiers`-Panel.
 ### Mesh Source
 
 `Mesh Source`: If enabled the option will override the current the mesh with the `Source Object`
+
 `Source Object`: Object of type Mesh, Curve, Text, Surface or Metaball
+
 `Use Modifiers`: Wether or not to apply the Modifier-stack of the `Source Object`.
+
     can lead to interesting feedback behaviour if the `Source Object` is the Object itself.
+    
     (has to be enabled when using Metaballs)
     
 
 ### Modifier Cache
 
 `Frame Start`: Start frame of the cache
+
 `Frame End`: End frame of the cache
+
 `Filepath`: Filepath of the Alembic cache sequence. (Framenumber and fileextension will be added automatically)
+
 `Bake Cache`: Bake cache to a sequence of Alembic files
+
 `Free Cache`: Hide bake
+
 `Apply Cache`: Applies Cache as a 'Mesh Seqence Cache'-Modifier
