@@ -13,6 +13,7 @@ bl_info = {
 
 import bpy
 import os
+import functools
 
 handler_frame_update_running = False
 
@@ -26,62 +27,72 @@ def handler_update_filepath(self, context):
     print(create_filepath(self.filepath, self.frame_start))
 
 
-def handler_toggle_mesh_source(self, context):
+def handler_toggle_mesh_override(self, context):
+    print('toggle_mesh_override')
     if self.enabled:
-        self.original_data = bpy.data.meshes.new_from_object(context.object)
+        self.original_data = context.object.data.copy()
         self.original_data.name = context.object.data.name + '.original'
     else:
+        temp_data = context.object.data
         context.object.data = self.original_data
         context.object.data.name = context.object.data.name.replace('.original', '')
-     
+        bpy.data.meshes.remove(temp_data) 
     
 def filter_renderable_objects(self, context):
     return context.type in ['MESH', 'META', 'SURFACE', 'CURVE']
 
-@bpy.app.handlers.persistent
-def handler_frame_update(scene):
+def handler_change(scene, handler_type):
     global handler_frame_update_running
     if handler_frame_update_running:
         return
     handler_frame_update_running = True
     for obj in bpy.data.objects:
-        mss = obj.mesh_source_settings
-        mcs = obj.modifier_cache_settings
+        mss = obj.mesh_override
+        mcs = obj.modifier_cache
         
-        if not mss.enabled and mcs.use_cache:
+        skip = obj == mss.override_object and handler_type == 'depsgraph'
+        skip = skip or (not mss.enabled and mcs.use_cache)
+        if skip:
             continue
     
-        src_obj = mss.source_object
+        src_obj = mss.override_object
         if src_obj:
             if mss.use_modifiers:
                 depsgraph = bpy.context.evaluated_depsgraph_get()
                 src_obj = src_obj.evaluated_get(depsgraph)
-                pass
             old_mesh = obj.data
             new_mesh = bpy.data.meshes.new_from_object(src_obj)
             obj.data = new_mesh
             bpy.data.meshes.remove(old_mesh)
     handler_frame_update_running = False
 
+@bpy.app.handlers.persistent
+def handler_depsgraph_update(scene):
+    handler_change(scene, 'depsgraph')
+
+@bpy.app.handlers.persistent
+def handler_frame_change(scene):
+    handler_change(scene, 'frame_change')
+
     
-class ModifierVisibilitySettings(bpy.types.PropertyGroup):
+class ModifierVisibility(bpy.types.PropertyGroup):
     name: bpy.props.StringProperty(name='Modifier Name')
     show_viewport: bpy.props.BoolProperty(name='Show Viewport', default=True)
     show_render: bpy.props.BoolProperty(name='Show Render', default=True)
 
-class ModifierCacheSettings(bpy.types.PropertyGroup):
+class ModifierCache(bpy.types.PropertyGroup):
     frame_start: bpy.props.IntProperty(name='Start Frame', default=0, min=0)
     frame_end: bpy.props.IntProperty(name='End Frame', default=250, min=0)
     
-    filepath: bpy.props.StringProperty(name='Filepath', default='//Cache/', update=handler_update_filepath)
+    filepath: bpy.props.StringProperty(name='Filepath', default='/tmp/', update=handler_update_filepath)
     use_cache: bpy.props.BoolProperty(name='Use Cache', default=False)
-    modifier_visibility: bpy.props.CollectionProperty(type=ModifierVisibilitySettings, name='Modifier Visibility')
+    modifier_visibility: bpy.props.CollectionProperty(type=ModifierVisibility, name='Modifier Visibility')
     
     
-class MeshSourceSettings(bpy.types.PropertyGroup):
-    enabled: bpy.props.BoolProperty(name='Enabled', default=False, update=handler_toggle_mesh_source)
+class MeshOverride(bpy.types.PropertyGroup):
+    enabled: bpy.props.BoolProperty(name='Enabled', default=False, update=handler_toggle_mesh_override)
     original_data: bpy.props.PointerProperty(type=bpy.types.Mesh, name='Original Data')
-    source_object: bpy.props.PointerProperty(type=bpy.types.Object, name='Source Object', poll=filter_renderable_objects)
+    override_object: bpy.props.PointerProperty(type=bpy.types.Object, name='Override Object', poll=filter_renderable_objects)
     use_modifiers: bpy.props.BoolProperty(name='Use Modifiers', default=False)
 
 
@@ -93,7 +104,7 @@ class ApplyModifierCache(bpy.types.Operator):
     def apply_modifier_cache(self, obj):
         if '__MODIFIER_SEQUENCE_CACHE__' in obj.modifiers:
             obj.modifiers['__MODIFIER_SEQUENCE_CACHE__'].name = 'Modifier Sequence Cache'
-        obj.modifier_cache_settings.use_cache = False
+        obj.modifier_cache.use_cache = False
         
                 
     @classmethod
@@ -111,7 +122,7 @@ class FreeModifierCache(bpy.types.Operator):
     bl_label = "Free Modifier Cache"
     
     def disable_modifier_cache(self, obj):
-        mcs = obj.modifier_cache_settings
+        mcs = obj.modifier_cache
         
         for mv in mcs.modifier_visibility:
             if mv.name in obj.modifiers:
@@ -140,9 +151,8 @@ class BakeModifierCache(bpy.types.Operator):
     bl_idname = "object.bake_modifier_cache"
     bl_label = "Bake Modifier Cache"
     
-    
     def setup(self, context):
-        mcs = context.object.modifier_cache_settings
+        mcs = context.object.modifier_cache
         context.scene.frame_set(mcs.frame_start)
         self.filepath = abspath(mcs.filepath)
         if not os.path.exists(self.filepath):
@@ -154,14 +164,14 @@ class BakeModifierCache(bpy.types.Operator):
     def cleanup(self, context):
         context.window_manager.progress_end()
         context.window_manager.event_timer_remove(self._timer)
-        context.object.modifier_cache_settings.use_cache = True
-        context.scene.frame_set(context.object.modifier_cache_settings.frame_start)
+        context.object.modifier_cache.use_cache = True
+        context.scene.frame_set(context.object.modifier_cache.frame_start)
         self.enable_modifier_cache(context.object)
         
         
     def save_frame(self, context):
         obj = context.object
-        fp = create_filepath(context.object.modifier_cache_settings.filepath, context.scene.frame_current)
+        fp = create_filepath(context.object.modifier_cache.filepath, context.scene.frame_current)
         print(fp)
         bpy.ops.wm.alembic_export(filepath=fp,
             start=context.scene.frame_current,
@@ -177,10 +187,8 @@ class BakeModifierCache(bpy.types.Operator):
             as_background_job=False,
         )
         
-            
-    
     def set_cache_file(self, obj):
-        mcs = obj.modifier_cache_settings
+        mcs = obj.modifier_cache
         
         cache_modifier = obj.modifiers.new('__MODIFIER_SEQUENCE_CACHE__', 'MESH_SEQUENCE_CACHE')
         
@@ -202,7 +210,7 @@ class BakeModifierCache(bpy.types.Operator):
         
 
     def enable_modifier_cache(self, obj):
-        mcs = obj.modifier_cache_settings
+        mcs = obj.modifier_cache
         mv = mcs.modifier_visibility
         
         mv.clear()
@@ -221,19 +229,18 @@ class BakeModifierCache(bpy.types.Operator):
         self.save_frame(context)
         context.window_manager.progress_update(context.scene.frame_current)
         context.scene.frame_set(context.scene.frame_current+1)
-        if context.scene.frame_current > context.object.modifier_cache_settings.frame_end:
+        if context.scene.frame_current > context.object.modifier_cache.frame_end:
             self.cleanup(context)
             print('Finished')
             return {'FINISHED'}
         return {'RUNNING_MODAL'}
-            
 
     @classmethod
     def poll(cls, context):
         return context.active_object is not None
     
     def modal(self, context, event):
-        mcs = context.object.modifier_cache_settings
+        mcs = context.object.modifier_cache
         if event.type == 'TIMER':
             return self.run(context)
                 
@@ -248,35 +255,31 @@ class BakeModifierCache(bpy.types.Operator):
         self.setup(context)
         return {'RUNNING_MODAL'}
 
-class MeshSourcePanel(bpy.types.Panel):
+
+class MeshOverridePanel(bpy.types.Panel):
     """Creates a Panel in the Modifier properties window"""
-    bl_label = "Mesh Source"
-    bl_idname = "MODIFIER_PT_mesh_source"
+    bl_label = "Mesh Override"
+    bl_idname = "MODIFIER_PT_mesh_override"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "modifier"
     bl_option = {'DEFAULT_CLOSED'}
         
     def draw_header(self, context):
-        mss = context.object.mesh_source_settings
-#        scene = context.scene
+        mss = context.object.mesh_override
         layout = self.layout
         layout.prop(mss, "enabled", text="")
 
-
     def draw(self, context):
         obj = context.object
-        mss = obj.mesh_source_settings
-        mcs = obj.modifier_cache_settings
+        mss = obj.mesh_override
+        mcs = obj.modifier_cache
         layout = self.layout
         layout.enabled = mss.enabled and not mcs.use_cache
 
-        row = layout.row()
-        row.prop(mss, 'source_object')
-        
-        row = layout.row()
-        row.prop(mss, 'use_modifiers')
-        
+        for p in ['override_object', 'use_modifiers', 'original_data']:
+            row = layout.row()
+            row.prop(mss, p)
         
 
 class ModifierCachePanel(bpy.types.Panel):
@@ -291,17 +294,11 @@ class ModifierCachePanel(bpy.types.Panel):
     def draw(self, context):
         layout = self.layout
         obj = context.object
-        mcs = obj.modifier_cache_settings
-
-        row = layout.row()
-        row.prop(mcs, 'frame_start')
+        mcs = obj.modifier_cache
         
-        row = layout.row()
-        row.prop(mcs, 'frame_end')
-        
-        
-        row = layout.row()
-        row.prop(mcs, "filepath")
+        for p in ['frame_start', 'frame_end', 'filepath']:
+            row = layout.row()
+            row.prop(mcs, p)
         
         row = layout.row()
         row.label(text=create_filepath(mcs.filepath, mcs.frame_start))
@@ -328,45 +325,45 @@ def override_modifier_draw(self, context):
             box = layout.template_modifier(md)
             
             if box:
-                box.enabled = not ob.modifier_cache_settings.use_cache
+                box.enabled = not ob.modifier_cache.use_cache
                 getattr(self, md.type)(box, ob, md)
                 
 
+classes = [
+    ModifierVisibility,
+    ModifierCache,
+    MeshOverride,
+    BakeModifierCache,
+    FreeModifierCache,
+    ApplyModifierCache,
+    MeshOverridePanel,
+    ModifierCachePanel
+]
 
 def register():
     bpy.types.DATA_PT_modifiers._draw = bpy.types.DATA_PT_modifiers.draw
     bpy.types.DATA_PT_modifiers.draw = override_modifier_draw
     
-    bpy.utils.register_class(ModifierVisibilitySettings)
-    bpy.utils.register_class(ModifierCacheSettings)
-    bpy.utils.register_class(MeshSourceSettings)
-    bpy.utils.register_class(BakeModifierCache)
-    bpy.utils.register_class(FreeModifierCache)
-    bpy.utils.register_class(ApplyModifierCache)
-    bpy.types.Object.modifier_cache_settings = bpy.props.PointerProperty(type=ModifierCacheSettings)
-    bpy.types.Object.mesh_source_settings = bpy.props.PointerProperty(type=MeshSourceSettings)
-    bpy.utils.register_class(MeshSourcePanel)
-    bpy.utils.register_class(ModifierCachePanel)
+    for c in classes:
+        bpy.utils.register_class(c)
+        
+    bpy.types.Object.modifier_cache= bpy.props.PointerProperty(type=ModifierCache)
+    bpy.types.Object.mesh_override= bpy.props.PointerProperty(type=MeshOverride)
     
-    bpy.app.handlers.frame_change_post.append(handler_frame_update)
-    bpy.app.handlers.depsgraph_update_post.append(handler_frame_update)
+    bpy.app.handlers.frame_change_post.append(handler_frame_change)
+    bpy.app.handlers.depsgraph_update_post.append(handler_depsgraph_update)
 
 
 def unregister():
     bpy.types.DATA_PT_modifiers.draw = bpy.types.DATA_PT_modifiers._draw
-    del bpy.types.Object.modifier_cache_settings
-    del bpy.types.Object.mesh_source_settings
-    bpy.utils.unregister_class(BakeModifierCache)
-    bpy.utils.unregister_class(FreeModifierCache)
-    bpy.utils.unregister_class(ApplyModifierCache)
-    bpy.utils.unregister_class(ModifierVisibilitySettings)
-    bpy.utils.unregister_class(ModifierCacheSettings)
-    bpy.utils.unregister_class(MeshSourceSettings)
-    bpy.utils.unregister_class(ModifierCachePanel)
-    bpy.utils.unregister_class(MeshSourcePanel)
+    del bpy.types.Object.modifier_cache
+    del bpy.types.Object.mesh_override
     
-    bpy.app.handlers.frame_change_post.remove(handler_frame_update)
-    bpy.app.handlers.depsgraph_update_post.remove(handler_frame_update)
+    for c in reversed(classes):
+        bpy.utils.unregister_class(c)
+    
+    bpy.app.handlers.frame_change_post.remove(handler_frame_change)
+    bpy.app.handlers.depsgraph_update_post.remove(handler_depsgraph_update)
 
 
 if __name__ == "__main__":

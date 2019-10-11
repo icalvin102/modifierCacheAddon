@@ -12,17 +12,17 @@ blender addon to add modifiers on all object types and bake them into alembic se
 
 ## Usage
 
-The addon adds `Mesh Source` and `Modifier Cache` to the `Modifiers`-Panel.
+The addon adds `Mesh Override` and `Modifier Cache` to the `Modifiers`-Panel.
 
-### Mesh Source
+### Mesh Override 
 
-`Mesh Source`: If enabled the option will override the current the mesh with the `Source Object`
+`Mesh Override`: If enabled the option will override the current the mesh with the `Override Object`
 
-`Source Object`: Object of type Mesh, Curve, Text, Surface or Metaball
+`Override Object`: Object of type Mesh, Curve, Text, Surface or Metaball
 
-`Use Modifiers`: Wether or not to apply the Modifier-stack of the `Source Object`.
+`Use Modifiers`: Wether or not to apply the Modifier-stack of the `Override Object`.
 
-    can lead to interesting feedback behaviour if the `Source Object` is the Object itself.
+    can lead to interesting feedback behaviour if the `Override Object` is the Object itself.
     
     (has to be enabled when using Metaballs)
     
